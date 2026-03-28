@@ -13,8 +13,8 @@ from PyQt5.QtWidgets import (
     QLabel, QSizePolicy, QSplitter, QFrame, QTabWidget, QSlider,
     QInputDialog,
 )
-from PyQt5.QtCore import Qt, QTimer, QEvent
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtCore import Qt, QTimer, QEvent, QSize
+from PyQt5.QtGui import QFont, QColor, QPen, QPainter, QFontMetrics
 
 import pyvista as pv
 from pyvistaqt import QtInteractor  # pip install pyvistaqt
@@ -25,21 +25,21 @@ from skimage.measure import marching_cubes
 # ══════════════════════════════════════════════════════
 #  全局配色
 # ══════════════════════════════════════════════════════
-BG_MAIN = "#F0F4F8"      # 浅灰背景
-BG_PANEL = "#FFFFFF"     # 面板背景
-BG_INPUT = "#FFFFFF"     # 输入框背景
-BORDER = "#DCE4E8"       # 边框颜色 (更淡的灰)
-ACCENT = "#2980B9"       # 强调色
-BTN_ADD = "#3498DB"      # 蓝色按钮
-BTN_PLOT = "#2ECC71"     # 绿色按钮
-BTN_CLEAR = "#E74C3C"    # 红色按钮
-TEXT_MAIN = "#2C3E50"    # 深色文字
-TEXT_SUB = "#7F8C8D"     # 次要文字
-TEXT_HINT = "#95A5A6"    # 提示文字
-CLR_X = "#CC2222"        # X轴 红色 (深红)
-CLR_Y = "#228822"        # Y轴 绿色 (深绿)
-CLR_Z = "#1144CC"        # Z轴 蓝色 (深蓝)
-SCENE_BG = "#F0F4F8"     # 3D场景背景
+BG_MAIN = "#F0F4F8"  # 浅灰背景
+BG_PANEL = "#FFFFFF"  # 面板背景
+BG_INPUT = "#FFFFFF"  # 输入框背景
+BORDER = "#DCE4E8"  # 边框颜色 (更淡的灰)
+ACCENT = "#2980B9"  # 强调色
+BTN_ADD = "#3498DB"  # 蓝色按钮
+BTN_PLOT = "#2ECC71"  # 绿色按钮
+BTN_CLEAR = "#E74C3C"  # 红色按钮
+TEXT_MAIN = "#2C3E50"  # 深色文字
+TEXT_SUB = "#7F8C8D"  # 次要文字
+TEXT_HINT = "#95A5A6"  # 提示文字
+CLR_X = "#CC2222"  # X轴 红色 (深红)
+CLR_Y = "#228822"  # Y轴 绿色 (深绿)
+CLR_Z = "#1144CC"  # Z轴 蓝色 (深蓝)
+SCENE_BG = "#F0F4F8"  # 3D场景背景
 
 AXIS_LEN = 10
 AXIS_NEG = 10
@@ -47,14 +47,14 @@ TICK_HALF = 0.1
 
 # 柔和的专业配色方案
 PALETTE_3D = [
-    "#F1C40F", # 柔和黄
-    "#E67E22", # 橙色
-    "#E74C3C", # 红色
-    "#9B59B6", # 紫色
-    "#3498DB", # 蓝色
-    "#1ABC9C", # 青色
-    "#2ECC71", # 绿色
-    "#34495E", # 深蓝灰
+    "#F1C40F",  # 柔和黄
+    "#E67E22",  # 橙色
+    "#E74C3C",  # 红色
+    "#9B59B6",  # 紫色
+    "#3498DB",  # 蓝色
+    "#1ABC9C",  # 青色
+    "#2ECC71",  # 绿色
+    "#34495E",  # 深蓝灰
 ]
 
 
@@ -97,11 +97,11 @@ def generate_random_color(existing_colors=None):
 
         min_dist = float('inf')
         for er, eg, eb in existing_rgb:
-            dist = math.sqrt((r-er)**2 + (g-eg)**2 + (b-eb)**2)
+            dist = math.sqrt((r - er) ** 2 + (g - eg) ** 2 + (b - eb) ** 2)
             if dist < min_dist:
                 min_dist = dist
 
-        if min_dist > 0.25: # 距离足够远，直接接受
+        if min_dist > 0.25:  # 距离足够远，直接接受
             return _rgb_to_hex((r, g, b))
 
         if min_dist > max_min_dist:
@@ -117,22 +117,122 @@ def generate_random_color(existing_colors=None):
 
 
 def sympy_to_label(eq_text):
-    s = eq_text.replace('**', '^')
+    s = eq_text.strip().replace('**', '^')
 
-    # 构造上标映射表（只对数字做上标，+、= 等仍保持在基线）
+    # 常见数学符号美化
+    s = re.sub(r'\bsqrt\s*\(', '√(', s)
+    s = re.sub(r'\bpi\b', 'π', s)
+
+    # 构造上标映射表（数字 + 正负号）
     sup_map = str.maketrans({
         '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
         '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+        '+': '⁺', '-': '⁻'
     })
 
-    def repl(match):
-        # match.group(1) 是 ^ 后面的一串数字
+    def _to_sup(match):
         txt = match.group(1)
         return txt.translate(sup_map)
 
-    # 只把 ^ + 纯数字 变成上标，避免把 +、= 也抬高
-    s = re.sub(r'\^([0-9]+)', repl, s)
+    # 支持 ^(2) / ^(-2) 这类写法
+    s = re.sub(r'\^\(([-+]?\d+)\)', _to_sup, s)
+    # 支持 ^2 / ^-2 这类写法
+    s = re.sub(r'\^([-+]?\d+)', _to_sup, s)
+
+    # 轻量排版优化
+    s = s.replace('<=', '≤').replace('>=', '≥').replace('!=', '≠')
+    s = re.sub(r'\s*=\s*', ' = ', s)
+
     return s
+
+
+def sympy_to_rich_label(eq_text):
+    # 兼容旧调用：已统一回退到纯文本格式化。
+    return sympy_to_label(eq_text)
+
+
+def _find_match_paren(text, l_idx):
+    depth = 0
+    for i in range(l_idx, len(text)):
+        ch = text[i]
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def measure_formula_width(fm, text):
+    """按 draw_formula_text 的同一规则估算公式宽度。"""
+    i = 0
+    width = 0.0
+    while i < len(text):
+        if text[i] == '√' and i + 1 < len(text) and text[i + 1] == '(':
+            r_idx = _find_match_paren(text, i + 1)
+            if r_idx != -1:
+                rad = text[i + 1:r_idx + 1]
+                root_w = max(6.0, fm.height() * 0.62)
+                width += root_w + measure_formula_width(fm, rad)
+                i = r_idx + 1
+                continue
+
+        width += fm.horizontalAdvance(text[i])
+        i += 1
+    return width
+
+
+def draw_formula_text(painter, x, baseline_y, text):
+    """绘制公式文本：对 √(...) 使用手绘根号与连续横线。"""
+    fm = painter.fontMetrics()
+    i = 0
+    cur_x = float(x)
+    while i < len(text):
+        if text[i] == '√' and i + 1 < len(text) and text[i + 1] == '(':
+            r_idx = _find_match_paren(text, i + 1)
+            if r_idx != -1:
+                rad = text[i + 1:r_idx + 1]
+                root_w = max(6.0, fm.height() * 0.62)
+                rad_x = cur_x + root_w
+                # 先绘制被开方内容，得到精确终点，再绘制根号横线覆盖其上方。
+                rad_end = draw_formula_text(painter, rad_x, baseline_y, rad)
+
+                top_y = baseline_y - fm.ascent() + 1
+                start_x = cur_x + root_w * 0.58
+                end_x = rad_end - 1.0
+                old_pen = painter.pen()
+                pen = QPen(old_pen.color(), 1.0)
+                painter.setPen(pen)
+                painter.drawLine(int(round(start_x)), int(round(top_y)),
+                                 int(round(end_x)), int(round(top_y)))
+                # 手绘根号：小钩 + 上升斜线，与横线直接相接
+                x0 = cur_x + root_w * 0.05
+                y0 = baseline_y - fm.height() * 0.12
+                x1 = cur_x + root_w * 0.22
+                y1 = baseline_y + fm.height() * 0.20
+                x2 = cur_x + root_w * 0.42
+                y2 = baseline_y - fm.height() * 0.10
+                x3 = start_x
+                y3 = top_y
+                painter.drawLine(int(round(x0)), int(round(y0)),
+                                 int(round(x1)), int(round(y1)))
+                painter.drawLine(int(round(x1)), int(round(y1)),
+                                 int(round(x2)), int(round(y2)))
+                painter.drawLine(int(round(x2)), int(round(y2)),
+                                 int(round(x3)), int(round(y3)))
+                painter.setPen(old_pen)
+
+                cur_x = rad_end
+                i = r_idx + 1
+                continue
+
+        ch = text[i]
+        painter.drawText(int(round(cur_x)), int(round(baseline_y)), ch)
+        cur_x += fm.horizontalAdvance(ch)
+        i += 1
+
+    return cur_x
 
 
 def _nice_step(dist):
@@ -151,8 +251,6 @@ def _nice_step(dist):
         return 10.0 * mag
 
 
-
-
 # ══════════════════════════════════════════════════════
 #  Qt 浮动图例（不依赖 PyVista 内置图例）
 # ══════════════════════════════════════════════════════
@@ -162,11 +260,24 @@ class LegendOverlay(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("LegendOverlay")
-        self.setAttribute(Qt.WA_NativeWindow, True) # 必须作为原生窗口才能覆盖在 VTK 上
-        self.setAttribute(Qt.WA_TranslucentBackground, True) # 支持半透明
+        self.setAttribute(Qt.WA_NativeWindow, True)  # 必须作为原生窗口才能覆盖在 VTK 上
+        self.setAttribute(Qt.WA_TranslucentBackground, False)  # 使用不透明背景，避免新增条目时短暂变暗
 
         # 使用纯绘制模式，不使用子控件 Layout
         self._entries = []
+        self._legend_title_font = QFont("Segoe UI", 8, QFont.Bold)
+        self._legend_item_font = QFont("Segoe UI", 10)
+        self._left_pad = 8
+        self._right_pad = 8
+        self._top_pad = 6
+        self._bottom_pad = 6
+        self._title_gap = 4
+        self._color_size = 9
+        self._color_gap = 6
+        self._title_h = 12
+        self._row_h = 18
+        self._title_baseline = 9
+        self._item_baseline = 11
         self.hide()
 
     def update_entries(self, entries):
@@ -175,21 +286,39 @@ class LegendOverlay(QFrame):
             self.hide()
             return
 
-        # 计算所需尺寸
+        # 计算所需尺寸（严格单行：色块 + 方程）
         from PyQt5.QtGui import QFontMetrics
-        fm_title = QFontMetrics(QFont("Segoe UI", 10, QFont.Bold))
-        fm_item = QFontMetrics(QFont("Consolas", 10))
+        title_font = QFont("Segoe UI", 8, QFont.Bold)
+        item_font = QFont("Segoe UI", 10)
+        fm_title = QFontMetrics(title_font)
+        fm_item = QFontMetrics(item_font)
 
-        width = fm_title.width("方程列表") + 32
-        height = 12 + fm_title.height() + 12
+        self._legend_title_font = title_font
+        self._legend_item_font = item_font
 
+        self._left_pad = 8
+        self._right_pad = 8
+        self._top_pad = 6
+        self._bottom_pad = 6
+        self._title_gap = 4
+        self._color_size = 9
+        self._color_gap = 6
+        self._title_h = fm_title.height()
+        item_text_h = fm_item.height()
+        # 每行按正常字体高度计算，避免异常字体度量造成超大空白
+        self._row_h = max(self._color_size + 1, item_text_h + 1)
+        self._title_baseline = (self._title_h - (fm_title.ascent() + fm_title.descent())) / 2.0 + fm_title.ascent()
+        self._item_baseline = (self._row_h - item_text_h) / 2.0 + fm_item.ascent()
+
+        max_text_w = 0
         for text, _ in entries:
-            w = 16 + 16 + 7 + fm_item.width(text) + 16
-            if w > width:
-                width = w
-            height += fm_item.height() + 6
+            max_text_w = max(max_text_w, fm_item.horizontalAdvance(text))
 
-        height += 6 # padding bottom
+        title_w = fm_title.horizontalAdvance("方程列表")
+        row_w = self._left_pad + self._color_size + self._color_gap + max_text_w + self._right_pad
+        # 宽度由标题和“最长方程”共同决定，不使用固定下限
+        width = max(title_w + self._left_pad + self._right_pad, row_w)
+        height = self._top_pad + self._title_h + self._title_gap + len(entries) * self._row_h + self._bottom_pad
 
         self.resize(width, height)
         self._reposition()
@@ -204,33 +333,46 @@ class LegendOverlay(QFrame):
         painter.setRenderHint(QPainter.Antialiasing)
 
         # 1. 背景
-        painter.setBrush(QBrush(QColor(255, 255, 255, 235)))
+        painter.setBrush(QBrush(QColor(255, 255, 255, 255)))
         painter.setPen(QPen(QColor("#BDC3C7"), 1.0))
         rect = self.rect().adjusted(0, 0, -1, -1)
         painter.drawRoundedRect(rect, 8, 8)
 
         # 2. 标题
         painter.setPen(QColor(TEXT_SUB))
-        painter.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        painter.drawText(16, 12 + painter.fontMetrics().ascent(), "方程列表")
+        title_font = getattr(self, "_legend_title_font", QFont("Segoe UI", 8, QFont.Bold))
+        painter.setFont(title_font)
+        title_baseline = self._top_pad + self._title_baseline
+        painter.drawText(int(round(self._left_pad)), int(round(title_baseline)), "方程列表")
 
         # 3. 条目
-        y = 12 + painter.fontMetrics().height() + 12
-        painter.setFont(QFont("Consolas", 10))
-        fm = painter.fontMetrics()
-        ascent = fm.ascent()
+        y = self._top_pad + self._title_h + self._title_gap
+        item_font = getattr(self, "_legend_item_font", QFont("Segoe UI", 10))
+        painter.setFont(item_font)
 
         for text, color_hex in self._entries:
+            row_top = y
+            color_y = row_top + (self._row_h - self._color_size) / 2.0
+            baseline = row_top + self._item_baseline
+
             # 颜色块
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(QColor(color_hex)))
-            painter.drawRoundedRect(16, y + 2, 14, 14, 3, 3)
+            painter.drawRoundedRect(
+                int(round(self._left_pad)),
+                int(round(color_y)),
+                self._color_size,
+                self._color_size,
+                2,
+                2
+            )
 
             # 文本
             painter.setPen(QColor(TEXT_MAIN))
-            painter.drawText(16 + 14 + 8, y + ascent, text)
+            text_x = self._left_pad + self._color_size + self._color_gap
+            painter.drawText(int(round(text_x)), int(round(baseline)), text)
 
-            y += fm.height() + 6
+            y += self._row_h
 
     def _reposition(self):
         # 固定右上角，不可拖动
@@ -273,6 +415,13 @@ class Canvas3D(QWidget):
         # 1. VTK 渲染器 (占据所有空间)
         # multi_samples 设为 8 以开启抗锯齿，显著提升线条平滑度，同时在现代 GPU 上保持高性能
         self.plotter = QtInteractor(parent=self, auto_update=False, multi_samples=8)
+
+        # 禁用 Z 轴旋转 (Roll)，防止拖拽时产生 Z 方向偏转
+        self.plotter.interactor.GetInteractorStyle().SetAutoAdjustCameraClippingRange(1)
+        # 使用 vtkInteractorStyleTerrain 或限制旋转轴
+        # 对于 PyVista，最直接的方法是设置相机模式
+        self.plotter.enable_terrain_style(mouse_wheel_zooms=True)
+
         self.plotter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         # 【Feature】自定义滚轮缩放逻辑 (以鼠标位置为中心)
         self.plotter.wheelEvent = self._handle_wheel_event
@@ -308,7 +457,7 @@ class Canvas3D(QWidget):
         # ──【New】动态视图范围更新定时器 ──
         # 避免滚轮缩放时频繁重绘，使用防抖 (Debounce)
         self._view_radius = 12.0  # 初始视图半径
-        self._last_focal_point = np.array([0.0, 0.0, 0.0]) # 【New】记录上一次的焦点位置
+        self._last_focal_point = np.array([0.0, 0.0, 0.0])  # 【New】记录上一次的焦点位置
         self._view_update_timer = QTimer(self)
         self._view_update_timer.setSingleShot(True)
         self._view_update_timer.timeout.connect(self._on_view_update_timeout)
@@ -324,6 +473,10 @@ class Canvas3D(QWidget):
 
         # 缓存最后一次绘制的方程数据，用于缩放重绘
         self._last_parsed_equations = []
+
+        # 右键拖动平移状态
+        self._right_dragging = False
+        self._right_drag_last_pos = None
 
     # ── 可见性控制定时器生命周期（Fix-1 核心）─────
     def showEvent(self, event):
@@ -352,8 +505,82 @@ class Canvas3D(QWidget):
             # 当 plotter 大小改变时，更新浮层位置
             if hasattr(self, '_legend'):
                 self._legend._reposition()
+            return super().eventFilter(obj, event)
+
+        if obj == self.plotter and event.type() == QEvent.MouseButtonPress:
+            if event.button() == Qt.RightButton:
+                self._right_dragging = True
+                self._right_drag_last_pos = event.pos()
+                return True
+
+        if obj == self.plotter and event.type() == QEvent.MouseMove:
+            if self._right_dragging and self._right_drag_last_pos is not None:
+                cur = event.pos()
+                dx = float(cur.x() - self._right_drag_last_pos.x())
+                dy = float(cur.y() - self._right_drag_last_pos.y())
+                self._right_drag_last_pos = cur
+                self._pan_camera_by_pixels(dx, dy)
+                return True
+
+        if obj == self.plotter and event.type() == QEvent.MouseButtonRelease:
+            if event.button() == Qt.RightButton:
+                self._right_dragging = False
+                self._right_drag_last_pos = None
+                return True
 
         return super().eventFilter(obj, event)
+
+    def _pan_camera_by_pixels(self, dx, dy):
+        """按屏幕像素量平移相机（右键拖动）。"""
+        if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+            return
+
+        try:
+            camera = self.plotter.camera
+            pos = np.array(camera.GetPosition(), dtype=float)
+            focal = np.array(camera.GetFocalPoint(), dtype=float)
+            view_dir = focal - pos
+            dist = float(np.linalg.norm(view_dir))
+            if dist < 1e-9:
+                return
+            view_dir /= dist
+
+            up = np.array(camera.GetViewUp(), dtype=float)
+            up_norm = float(np.linalg.norm(up))
+            if up_norm < 1e-9:
+                up = np.array([0.0, 0.0, 1.0], dtype=float)
+            else:
+                up /= up_norm
+
+            right = np.cross(view_dir, up)
+            rnorm = float(np.linalg.norm(right))
+            if rnorm < 1e-9:
+                return
+            right /= rnorm
+            up = np.cross(right, view_dir)
+            up /= max(float(np.linalg.norm(up)), 1e-9)
+
+            h = max(float(self.plotter.height()), 1.0)
+            if camera.GetParallelProjection():
+                world_per_pixel = (2.0 * float(camera.GetParallelScale())) / h
+            else:
+                view_angle_rad = math.radians(float(camera.GetViewAngle()))
+                world_per_pixel = (2.0 * dist * math.tan(view_angle_rad * 0.5)) / h
+
+            # 拖动方向与场景移动方向保持一致（“抓住场景拖动”手感）
+            delta = (-dx * world_per_pixel) * right + (dy * world_per_pixel) * up
+
+            camera.SetPosition(*(pos + delta))
+            camera.SetFocalPoint(*(focal + delta))
+            self.plotter.renderer.ResetCameraClippingRange()
+            self.plotter.render()
+            self._refresh_cam_info()
+
+            self._is_lod = True
+            self._view_update_timer.start(120)
+            self._zoom_end_timer.start(600)
+        except Exception:
+            pass
 
     # ── 相机信息刷新 ──────────────────────────────
     def _refresh_cam_info(self):
@@ -414,8 +641,10 @@ class Canvas3D(QWidget):
             return
         # 清除旧交线
         for actor in getattr(self, '_intersection_actors', []):
-            try: self.plotter.remove_actor(actor)
-            except: pass
+            try:
+                self.plotter.remove_actor(actor)
+            except:
+                pass
         self._intersection_actors = []
         # 触发一次 force_update=False → 走完整的交线计算路径
         self.draw_equations(self._last_parsed_equations, force_update=False)
@@ -680,8 +909,6 @@ class Canvas3D(QWidget):
         except Exception:
             pass
 
-
-
         self.plotter.render()
 
     def reset_view(self):
@@ -718,7 +945,7 @@ class Canvas3D(QWidget):
             if actor:
                 prop = actor.GetProperty()
                 self._last_ambient = prop.GetAmbient()
-                prop.SetAmbient(0.6) # 提高环境光使其发亮
+                prop.SetAmbient(0.6)  # 提高环境光使其发亮
 
             self.plotter.render()
         except Exception:
@@ -829,7 +1056,7 @@ class Canvas3D(QWidget):
         # ── 刻度标签 ───────────────────────────
         fmt = ("{:.0f}" if step >= 1.0 - 1e-9
                else "{:.1f}" if step >= 0.1 - 1e-9
-               else "{:.2f}")
+        else "{:.2f}")
 
         label_pts, label_texts = [], []
         for v in tick_vals:
@@ -853,7 +1080,7 @@ class Canvas3D(QWidget):
             self._tick_label_actor = self.plotter.add_point_labels(
                 np.array(label_pts, dtype=float),
                 label_texts,
-                font_size=16, # 字体大小适中
+                font_size=16,  # 字体大小适中
                 bold=False,
                 text_color=TEXT_MAIN,
                 always_visible=False,
@@ -894,12 +1121,12 @@ class Canvas3D(QWidget):
             return
         try:
             prop = actor.GetProperty()
-            prop.SetColor(0.0, 0.0, 0.0)        # 纯黑
-            prop.SetAmbient(1.0)                 # 全环境光 = 不受灯光方向影响
-            prop.SetDiffuse(0.0)                 # 无漫反射
-            prop.SetSpecular(0.0)                # 无高光
-            prop.SetLighting(False)              # 彻底关闭 VTK 光照管线
-            prop.SetOpacity(1.0)                 # 完全不透明
+            prop.SetColor(0.0, 0.0, 0.0)  # 纯黑
+            prop.SetAmbient(1.0)  # 全环境光 = 不受灯光方向影响
+            prop.SetDiffuse(0.0)  # 无漫反射
+            prop.SetSpecular(0.0)  # 无高光
+            prop.SetLighting(False)  # 彻底关闭 VTK 光照管线
+            prop.SetOpacity(1.0)  # 完全不透明
         except Exception:
             pass
         # Z-fighting 偏移（前置到这里统一管理）
@@ -921,7 +1148,7 @@ class Canvas3D(QWidget):
         force_update: 是否强制重新生成网格（用于视图范围更新）
         """
         self._busy = True
-        self._last_parsed_equations = parsed_list_with_ids # 【New】缓存以备重绘
+        self._last_parsed_equations = parsed_list_with_ids  # 【New】缓存以备重绘
         try:
             current_ids = set()
             new_data_map = {}
@@ -936,7 +1163,7 @@ class Canvas3D(QWidget):
             for eid in existing_ids:
                 if eid not in current_ids:
                     actor = self._eq_actors.pop(eid)
-                    self._eq_meshes.pop(eid, None)   # 【Fix】同步清除 mesh 引用
+                    self._eq_meshes.pop(eid, None)  # 【Fix】同步清除 mesh 引用
                     if eid in self._eq_colors:
                         del self._eq_colors[eid]
                     if actor is not None:
@@ -965,7 +1192,7 @@ class Canvas3D(QWidget):
                     try:
                         # 重新生成网格 (适应新视野)
                         new_mesh = self._build_isosurface(p)
-                        if new_mesh:
+                        if new_mesh is not None and getattr(new_mesh, "n_points", 0) > 0:
                             actor = self._eq_actors[eq_id]
                             mapper = actor.GetMapper()
                             if mapper:
@@ -986,11 +1213,11 @@ class Canvas3D(QWidget):
 
                 if eq_id in self._eq_actors:
                     if eq_id not in self._eq_colors:
-                         self._eq_colors[eq_id] = p['color']
+                        self._eq_colors[eq_id] = p['color']
                     continue
 
                 mesh = self._build_isosurface(p)
-                if mesh:
+                if mesh is not None and getattr(mesh, "n_points", 0) > 0:
                     # ──【Visual Optimization】材质与颜色 ──
                     color = p['color']  # 基础颜色来自随机分配，确保唯一性
 
@@ -1016,11 +1243,11 @@ class Canvas3D(QWidget):
 
                     # 针对特定类型的优化
                     if geom_type == "plane":
-                         # 平面：半透明，避免遮挡
-                         opacity = 0.35 # 进一步降低透明度
-                         specular = 0.1
-                         ambient = 0.6
-                         diffuse = 0.6
+                        # 平面：半透明，避免遮挡
+                        opacity = 0.35  # 进一步降低透明度
+                        specular = 0.1
+                        ambient = 0.6
+                        diffuse = 0.6
 
                     elif geom_type == "cylinder":
                         # 圆柱：类似 GeoGebra 的半透明风格
@@ -1063,7 +1290,7 @@ class Canvas3D(QWidget):
                         lighting=True,
                     )
                     self._eq_actors[eq_id] = actor
-                    self._eq_meshes[eq_id] = mesh   # 【Fix】保存 pv.PolyData 引用
+                    self._eq_meshes[eq_id] = mesh  # 【Fix】保存 pv.PolyData 引用
 
             # 5. 计算并绘制交线
             # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1081,7 +1308,7 @@ class Canvas3D(QWidget):
 
             # 【Update】根据当前视图范围动态调整交线裁剪范围
             view_r = getattr(self, '_view_radius', 12.0)
-            CLIP = view_r   # 交线裁剪范围（±view_r）
+            CLIP = view_r  # 交线裁剪范围（±view_r）
 
             mesh_ids = [eid for eid in current_ids
                         if eid in self._eq_meshes and eid in self._eq_actors
@@ -1113,18 +1340,18 @@ class Canvas3D(QWidget):
                         pp1 = m1.field_data["plane_params"]  # [nx,ny,nz,cx,cy,cz]
                         pp2 = m2.field_data["plane_params"]
 
-                        n1  = np.array(pp1[:3], dtype=float)
-                        n2  = np.array(pp2[:3], dtype=float)
-                        c1  = np.array(pp1[3:6], dtype=float)
-                        c2  = np.array(pp2[3:6], dtype=float)
-                        d1  = float(np.dot(n1, c1))
-                        d2  = float(np.dot(n2, c2))
+                        n1 = np.array(pp1[:3], dtype=float)
+                        n2 = np.array(pp2[:3], dtype=float)
+                        c1 = np.array(pp1[3:6], dtype=float)
+                        c2 = np.array(pp2[3:6], dtype=float)
+                        d1 = float(np.dot(n1, c1))
+                        d2 = float(np.dot(n2, c2))
 
                         # 交线方向 = n1 × n2
                         direction = np.cross(n1, n2)
                         dir_norm = np.linalg.norm(direction)
                         if dir_norm < 1e-9:
-                            continue   # 平行/共面，无交线
+                            continue  # 平行/共面，无交线
 
                         d_n = direction / dir_norm
 
@@ -1153,7 +1380,7 @@ class Canvas3D(QWidget):
                                     break
                             else:
                                 t_lo = (-CLIP - pt0[axis]) / d_n[axis]
-                                t_hi = ( CLIP - pt0[axis]) / d_n[axis]
+                                t_hi = (CLIP - pt0[axis]) / d_n[axis]
                                 if t_lo > t_hi:
                                     t_lo, t_hi = t_hi, t_lo
                                 t_min_v = max(t_min_v, t_lo)
@@ -1179,7 +1406,7 @@ class Canvas3D(QWidget):
                             m1, m2 = m2, m1  # 确保 m1 是球，m2 是面
 
                         if ("sphere_params" not in m1.field_data or
-                            "plane_params" not in m2.field_data):
+                                "plane_params" not in m2.field_data):
                             continue
 
                         # 球参数
@@ -1189,8 +1416,8 @@ class Canvas3D(QWidget):
 
                         # 面参数
                         pp = m2.field_data["plane_params"]
-                        n = np.array(pp[:3]) # 法线
-                        P0 = np.array(pp[3:6]) # 平面上一点
+                        n = np.array(pp[:3])  # 法线
+                        P0 = np.array(pp[3:6])  # 平面上一点
 
                         # 归一化法线
                         n_norm = np.linalg.norm(n)
@@ -1202,12 +1429,12 @@ class Canvas3D(QWidget):
 
                         # 判断相交情况
                         if abs(dist) > radius + 1e-9:
-                            continue # 相离
+                            continue  # 相离
 
                         # 交线圆半径
-                        r_circle = math.sqrt(max(0, radius**2 - dist**2))
+                        r_circle = math.sqrt(max(0, radius ** 2 - dist ** 2))
                         if r_circle < 1e-9:
-                            continue # 相切一点，忽略
+                            continue  # 相切一点，忽略
 
                         # 交线圆心
                         C_circle = C - dist * n
@@ -1226,7 +1453,7 @@ class Canvas3D(QWidget):
 
                         # 生成圆周点
                         # 增加采样点到 500 以获得极度平滑的曲线
-                        thetas = np.linspace(0, 2*np.pi, 501) # 闭合圆
+                        thetas = np.linspace(0, 2 * np.pi, 501)  # 闭合圆
                         # circle_pts = C_circle + r_circle * (cos * u + sin * v)
                         circle_pts = (C_circle[np.newaxis, :] +
                                       r_circle * np.outer(np.cos(thetas), u) +
@@ -1245,11 +1472,11 @@ class Canvas3D(QWidget):
                     # ── 圆柱×平面：解析法 (简化为离散采样求交) ────────
                     elif (g1 == "cylinder" and g2 == "plane") or (g1 == "plane" and g2 == "cylinder"):
                         if g1 == "plane":
-                             m1, m2 = m2, m1
+                            m1, m2 = m2, m1
 
                         # 确保参数存在
                         if ("cylinder_params" not in m1.field_data or
-                            "plane_params" not in m2.field_data):
+                                "plane_params" not in m2.field_data):
                             continue
 
                         # 取出参数
@@ -1286,7 +1513,7 @@ class Canvas3D(QWidget):
                         v = np.cross(D_cyl, u)
 
                         # 离散化 theta (增加采样到 400 提升精度)
-                        thetas = np.linspace(0, 2*np.pi, 401)
+                        thetas = np.linspace(0, 2 * np.pi, 401)
                         cos_t = np.cos(thetas)
                         sin_t = np.sin(thetas)
 
@@ -1305,7 +1532,7 @@ class Canvas3D(QWidget):
                         # 裁剪：根据 view_r 裁剪过远的交线
                         view_r = getattr(self, '_view_radius', 12.0)
                         dists = np.linalg.norm(ellipse_pts, axis=1)
-                        mask = dists < view_r * 1.5 # 稍微放宽
+                        mask = dists < view_r * 1.5  # 稍微放宽
 
                         if np.any(mask):
                             # 如果有点被保留，则绘制。注意 Spline 需要连续点，
@@ -1339,57 +1566,58 @@ class Canvas3D(QWidget):
                     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                     elif (g1 == "sphere" and g2 == "cylinder") or (g1 == "cylinder" and g2 == "sphere"):
                         if g1 == "cylinder":
-                            m1, m2 = m2, m1   # m1=球, m2=柱
+                            m1, m2 = m2, m1  # m1=球, m2=柱
 
                         if ("sphere_params" not in m1.field_data or
-                            "cylinder_params" not in m2.field_data):
+                                "cylinder_params" not in m2.field_data):
                             continue
 
-                        sp  = m1.field_data["sphere_params"]   # [cx,cy,cz,r]
-                        cp  = m2.field_data["cylinder_params"] # [cx,cy,cz,dx,dy,dz,r]
+                        sp = m1.field_data["sphere_params"]  # [cx,cy,cz,r]
+                        cp = m2.field_data["cylinder_params"]  # [cx,cy,cz,dx,dy,dz,r]
 
-                        S_c  = np.array(sp[:3], dtype=float)
-                        R_s  = float(sp[3])
-                        C_c  = np.array(cp[:3], dtype=float)
-                        D    = np.array(cp[3:6], dtype=float)
-                        R_c  = float(cp[6])
+                        S_c = np.array(sp[:3], dtype=float)
+                        R_s = float(sp[3])
+                        C_c = np.array(cp[:3], dtype=float)
+                        D = np.array(cp[3:6], dtype=float)
+                        R_c = float(cp[6])
 
                         D_norm = np.linalg.norm(D)
                         if D_norm < 1e-9: continue
                         D = D / D_norm  # 确保单位向量
 
                         # 构建圆柱面的正交基 u, v（均垂直于 D）
-                        tmp = np.array([1,0,0]) if abs(D[0]) < 0.9 else np.array([0,1,0])
-                        u = np.cross(D, tmp); u /= np.linalg.norm(u)
+                        tmp = np.array([1, 0, 0]) if abs(D[0]) < 0.9 else np.array([0, 1, 0])
+                        u = np.cross(D, tmp);
+                        u /= np.linalg.norm(u)
                         v = np.cross(D, u)
 
                         # 高密度 θ 采样，保证切点附近不丢失
                         N_theta = 1200
-                        thetas  = np.linspace(0, 2*np.pi, N_theta, endpoint=False)
-                        cos_t   = np.cos(thetas)
-                        sin_t   = np.sin(thetas)
+                        thetas = np.linspace(0, 2 * np.pi, N_theta, endpoint=False)
+                        cos_t = np.cos(thetas)
+                        sin_t = np.sin(thetas)
 
                         # Q(θ) = C_cyl - S_c + R_c*(u·cosθ + v·sinθ)
-                        rim = R_c * (np.outer(cos_t, u) + np.outer(sin_t, v))   # (N,3)
-                        Q   = (C_c - S_c)[np.newaxis, :] + rim                  # (N,3)
+                        rim = R_c * (np.outer(cos_t, u) + np.outer(sin_t, v))  # (N,3)
+                        Q = (C_c - S_c)[np.newaxis, :] + rim  # (N,3)
 
-                        QD   = Q.dot(D)                   # (N,)  Q·D
-                        QQ   = (Q * Q).sum(axis=1)        # (N,)  |Q|²
-                        disc = QD**2 - QQ + R_s**2        # (N,)  判别式
+                        QD = Q.dot(D)  # (N,)  Q·D
+                        QQ = (Q * Q).sum(axis=1)  # (N,)  |Q|²
+                        disc = QD ** 2 - QQ + R_s ** 2  # (N,)  判别式
 
                         # ── 分支1（h = -QD + sqrt(disc)）
                         # ── 分支2（h = -QD - sqrt(disc)）
                         # 对每个 θ 收集所有有效交点，再做链排序 + 平滑
                         all_pts = []
                         for branch in [+1, -1]:
-                            mask  = disc >= 0
+                            mask = disc >= 0
                             if not np.any(mask): continue
-                            sq    = np.where(mask, np.sqrt(np.maximum(disc, 0)), 0.0)
-                            h_val = -QD + branch * sq          # (N,)
+                            sq = np.where(mask, np.sqrt(np.maximum(disc, 0)), 0.0)
+                            h_val = -QD + branch * sq  # (N,)
 
                             # P = C_cyl + rim + h*D，只保留判别式≥0的点
-                            pts_b = (C_c[np.newaxis,:] + rim +
-                                     np.outer(h_val, D))       # (N,3)
+                            pts_b = (C_c[np.newaxis, :] + rim +
+                                     np.outer(h_val, D))  # (N,3)
                             valid = pts_b[mask]
                             if len(valid) >= 2:
                                 all_pts.append(valid)
@@ -1412,14 +1640,14 @@ class Canvas3D(QWidget):
                                 if is_closed:
                                     # 闭合曲线：循环边界
                                     prev = np.roll(sm, 1, axis=0)
-                                    nxt  = np.roll(sm, -1, axis=0)
-                                    sm   = 0.4 * sm + 0.3 * (prev + nxt)
+                                    nxt = np.roll(sm, -1, axis=0)
+                                    sm = 0.4 * sm + 0.3 * (prev + nxt)
                                 else:
                                     # 开放曲线：端点锚定
                                     sm[1:-1] = 0.4 * sm[1:-1] + 0.3 * (sm[:-2] + sm[2:])
-                            n_sp   = max(400, n * 4)
+                            n_sp = max(400, n * 4)
                             spline = pv.Spline(sm, n_sp)
-                            actor  = self.plotter.add_mesh(
+                            actor = self.plotter.add_mesh(
                                 spline, color="#000000",
                                 line_width=2.5, lighting=False, render=False)
                             self._style_intersection_actor(actor)
@@ -1435,8 +1663,8 @@ class Canvas3D(QWidget):
                         b2 = m2.bounds
                         eps = 1e-5
                         if (b1[0] > b2[1] + eps or b1[1] < b2[0] - eps or
-                            b1[2] > b2[3] + eps or b1[3] < b2[2] - eps or
-                            b1[4] > b2[5] + eps or b1[5] < b2[4] - eps):
+                                b1[2] > b2[3] + eps or b1[3] < b2[2] - eps or
+                                b1[4] > b2[5] + eps or b1[5] < b2[4] - eps):
                             continue
 
                         try:
@@ -1480,7 +1708,8 @@ class Canvas3D(QWidget):
                                     edge_set = set()
                                     ridx = 0
                                     while ridx < len(raw_lines):
-                                        seg_len = int(raw_lines[ridx]); ridx += 1
+                                        seg_len = int(raw_lines[ridx]);
+                                        ridx += 1
                                         if seg_len == 2 and ridx + 1 < len(raw_lines):
                                             a, b = int(raw_lines[ridx]), int(raw_lines[ridx + 1])
                                             edge_set.add((min(a, b), max(a, b)))
@@ -1503,12 +1732,13 @@ class Canvas3D(QWidget):
                                         prev, cur = start, first_nb
                                         while True:
                                             if len(adj[cur]) != 2:
-                                                break   # 端点或分叉点，停止
+                                                break  # 端点或分叉点，停止
                                             nxt = -1
                                             for nb in adj[cur]:
                                                 ek = (min(cur, nb), max(cur, nb))
                                                 if nb != prev and ek not in used_edges:
-                                                    nxt = nb; break
+                                                    nxt = nb;
+                                                    break
                                             if nxt == -1:
                                                 break
                                             used_edges.add((min(cur, nxt), max(cur, nxt)))
@@ -1520,7 +1750,7 @@ class Canvas3D(QWidget):
                                     priority = sorted(range(n_pts),
                                                       key=lambda i: (0 if len(adj[i]) == 1
                                                                      else 1 if len(adj[i]) >= 3
-                                                                     else 2))
+                                                      else 2))
                                     for start in priority:
                                         for nb in list(adj[start]):
                                             ek = (min(start, nb), max(start, nb))
@@ -1541,7 +1771,7 @@ class Canvas3D(QWidget):
                                     # - 内部点向邻点均值收敛 → 消除 Marching Cubes 网格边锯齿
                                     # - 80 次迭代 + alpha=0.6：足够光滑且不过度收缩
                                     N_SMOOTH = 80
-                                    ALPHA    = 0.6
+                                    ALPHA = 0.6
 
                                     for chain_pts in chains:
                                         n_c = len(chain_pts)
@@ -1636,6 +1866,210 @@ class Canvas3D(QWidget):
         # 优先级高于 Marching Cubes，确保完美光滑度和坐标准确性
         view_r = getattr(self, '_view_radius', 12.0)
 
+        # ──【Fix】单值显式曲面优先 (z=f(x,y) / y=f(x,z) / x=f(y,z)) ──
+        # 避免 Marching Cubes 在定义域边界处生成“竖直侧壁”。
+        if all(k in sd for k in ('x', 'y', 'z')):
+            limit = view_r * 0.6
+            if getattr(self, '_is_lod', False):
+                res_uv = 64
+            else:
+                res_uv = int(max(96, min(180, 260 / max(0.5, view_r))))
+
+            uv = np.linspace(-limit, limit, res_uv)
+            coord_order = [sd['z'], sd['y'], sd['x']]  # 优先 z=f(x,y)
+
+            for dep_sym in coord_order:
+                if dep_sym not in p['expr'].free_symbols:
+                    continue
+
+                indep_syms = [s for s in (sd['x'], sd['y'], sd['z']) if s != dep_sym]
+                try:
+                    sols = sp.solve(sp.Eq(p['expr'], 0), dep_sym, dict=False)
+                except Exception:
+                    continue
+
+                # 只处理单值分支，避免多值曲面误判（例如 z=±sqrt(...)）
+                if len(sols) != 1:
+                    continue
+
+                sol_expr = sp.simplify(sols[0])
+
+                # 针对 dep=sqrt(...) 的常见半球表达式，优先走解析几何路径，
+                # 避免数值网格在边界处出现锯齿。
+                try:
+                    if (sol_expr.is_Pow and sol_expr.exp == sp.Rational(1, 2)):
+                        radicand = sp.simplify(sol_expr.base)
+                        x_s = sd['x']
+                        y_s = sd['y']
+                        z_s = sd['z']
+                        quad = sp.expand(dep_sym ** 2 - radicand)
+                        poly_q = sp.Poly(quad, x_s, y_s, z_s)
+                        if poly_q.total_degree() == 2:
+                            c_map_q = {m: c for m, c in zip(poly_q.monoms(), poly_q.coeffs())}
+                            A = float(c_map_q.get((2, 0, 0), 0))
+                            B = float(c_map_q.get((0, 2, 0), 0))
+                            C = float(c_map_q.get((0, 0, 2), 0))
+                            eps = 1e-7
+                            is_sphere_like = (
+                                abs(A) > eps and
+                                abs(A - B) < eps and
+                                abs(A - C) < eps and
+                                abs(float(c_map_q.get((1, 1, 0), 0))) < eps and
+                                abs(float(c_map_q.get((1, 0, 1), 0))) < eps and
+                                abs(float(c_map_q.get((0, 1, 1), 0))) < eps
+                            )
+                            if is_sphere_like:
+                                D = float(c_map_q.get((1, 0, 0), 0))
+                                E = float(c_map_q.get((0, 1, 0), 0))
+                                F = float(c_map_q.get((0, 0, 1), 0))
+                                G = float(c_map_q.get((0, 0, 0), 0))
+                                cx = -D / (2.0 * A)
+                                cy = -E / (2.0 * A)
+                                cz = -F / (2.0 * A)
+                                r_sq = cx ** 2 + cy ** 2 + cz ** 2 - G / A
+                                if r_sq > eps:
+                                    radius = math.sqrt(r_sq)
+
+                                    subs_center = {}
+                                    center_map = {'x': cx, 'y': cy, 'z': cz}
+                                    for s in indep_syms:
+                                        subs_center[s] = center_map[str(s)]
+                                    dep_at_axis = center_map[str(dep_sym)]
+                                    dep_from_expr = float(sp.N(sol_expr.subs(subs_center)))
+                                    keep_positive = dep_from_expr >= dep_at_axis
+
+                                    res_sphere = 80 if getattr(self, '_is_lod', False) else 180
+                                    full_sphere = pv.Sphere(
+                                        radius=radius,
+                                        center=(cx, cy, cz),
+                                        theta_resolution=res_sphere,
+                                        phi_resolution=res_sphere
+                                    )
+                                    axis_idx = {'x': 0, 'y': 1, 'z': 2}[str(dep_sym)]
+                                    pts_axis = full_sphere.points[:, axis_idx]
+                                    if keep_positive:
+                                        mask = pts_axis >= (dep_at_axis - 1e-8)
+                                    else:
+                                        mask = pts_axis <= (dep_at_axis + 1e-8)
+
+                                    hemi = full_sphere.extract_points(
+                                        mask, adjacent_cells=True, include_cells=True
+                                    ).extract_surface().triangulate()
+                                    if hemi.n_points > 0:
+                                        hemi.compute_normals(
+                                            cell_normals=False, point_normals=True,
+                                            consistent_normals=True, inplace=True
+                                        )
+                                        hemi.field_data["geom_type"] = ["general"]
+                                        return hemi
+                except Exception:
+                    pass
+
+                try:
+                    f2 = sp.lambdify(indep_syms, sol_expr, modules=['numpy'])
+                except Exception:
+                    continue
+
+                U, V = np.meshgrid(uv, uv, indexing='ij')
+                try:
+                    with np.errstate(invalid='ignore', divide='ignore', over='ignore'):
+                        W = np.asarray(f2(U, V), dtype=float)
+                    if W.shape != U.shape:
+                        W = np.full(U.shape, float(np.ravel(W)[0]))
+                except Exception:
+                    continue
+
+                valid = np.isfinite(W)
+                if not np.any(valid):
+                    continue
+
+                # 对有效域很小的曲面做一次局部重采样，避免边界锯齿/破碎。
+                valid_ratio = float(np.count_nonzero(valid)) / float(valid.size)
+                if valid_ratio < 0.35:
+                    u_valid = U[valid]
+                    v_valid = V[valid]
+                    umin, umax = float(np.min(u_valid)), float(np.max(u_valid))
+                    vmin, vmax = float(np.min(v_valid)), float(np.max(v_valid))
+                    span_u = max(umax - umin, 1e-6)
+                    span_v = max(vmax - vmin, 1e-6)
+                    pad_u = max(span_u * 0.08, (2.0 * limit) / max(8, res_uv - 1))
+                    pad_v = max(span_v * 0.08, (2.0 * limit) / max(8, res_uv - 1))
+                    umin = max(-limit, umin - pad_u)
+                    umax = min(limit, umax + pad_u)
+                    vmin = max(-limit, vmin - pad_v)
+                    vmax = min(limit, vmax + pad_v)
+
+                    # 保持面片密度近似稳定：有效域越小，局部分辨率越高（上限保护）。
+                    zoom_u = (2.0 * limit) / max(umax - umin, 1e-6)
+                    zoom_v = (2.0 * limit) / max(vmax - vmin, 1e-6)
+                    res_local = int(min(260, max(res_uv + 24, res_uv * max(zoom_u, zoom_v))))
+                    u2 = np.linspace(umin, umax, res_local)
+                    v2 = np.linspace(vmin, vmax, res_local)
+                    U2, V2 = np.meshgrid(u2, v2, indexing='ij')
+                    try:
+                        with np.errstate(invalid='ignore', divide='ignore', over='ignore'):
+                            W2 = np.asarray(f2(U2, V2), dtype=float)
+                        if W2.shape != U2.shape:
+                            W2 = np.full(U2.shape, float(np.ravel(W2)[0]))
+                        valid2 = np.isfinite(W2)
+                        if np.any(valid2):
+                            U, V, W, valid = U2, V2, W2, valid2
+                    except Exception:
+                        pass
+
+                coord_map = {
+                    str(indep_syms[0]): U,
+                    str(indep_syms[1]): V,
+                    str(dep_sym): W,
+                }
+                X = coord_map['x']
+                Y = coord_map['y']
+                Z = coord_map['z']
+
+                points = np.column_stack((X.ravel(), Y.ravel(), Z.ravel()))
+                valid_flat = valid.ravel()
+                valid_count = int(np.count_nonzero(valid_flat))
+                if valid_count < 3:
+                    continue
+
+                idx_map = np.full(points.shape[0], -1, dtype=np.int_)
+                idx_map[valid_flat] = np.arange(valid_count, dtype=np.int_)
+                points_valid = points[valid_flat]
+
+                faces = []
+                n = U.shape[0]
+                for i in range(n - 1):
+                    row = i * n
+                    next_row = (i + 1) * n
+                    for j in range(n - 1):
+                        p00 = row + j
+                        p01 = row + j + 1
+                        p10 = next_row + j
+                        p11 = next_row + j + 1
+
+                        i00 = idx_map[p00]
+                        i01 = idx_map[p01]
+                        i10 = idx_map[p10]
+                        i11 = idx_map[p11]
+
+                        if i00 >= 0 and i10 >= 0 and i11 >= 0:
+                            faces.extend([3, int(i00), int(i10), int(i11)])
+                        if i00 >= 0 and i11 >= 0 and i01 >= 0:
+                            faces.extend([3, int(i00), int(i11), int(i01)])
+
+                if not faces:
+                    continue
+
+                mesh = pv.PolyData(points_valid.astype(float), np.asarray(faces, dtype=np.int_))
+                try:
+                    mesh.clean(inplace=True)
+                except Exception:
+                    pass
+                mesh.compute_normals(cell_normals=False, point_normals=True,
+                                     consistent_normals=True, inplace=True)
+                mesh.field_data["geom_type"] = ["general"]
+                return mesh
+
         if all(a is not None for a in args):
             try:
                 x_s, y_s, z_s = args
@@ -1678,14 +2112,14 @@ class Canvas3D(QWidget):
                         cy = -float(E) / (2 * float(A))
                         cz = -float(F) / (2 * float(A))
 
-                        r_sq = cx**2 + cy**2 + cz**2 - float(G)/float(A)
+                        r_sq = cx ** 2 + cy ** 2 + cz ** 2 - float(G) / float(A)
 
                         if r_sq > 0:
                             radius = math.sqrt(r_sq)
                             # 生成参数化球体
                             # 降低分辨率以在缩放时保持流畅
                             mesh = pv.Sphere(radius=radius, center=(cx, cy, cz),
-                                           theta_resolution=72, phi_resolution=72)
+                                             theta_resolution=72, phi_resolution=72)
                             # 标记几何体类型，用于渲染风格控制
                             mesh.field_data["geom_type"] = ["sphere"]
                             mesh.field_data["sphere_params"] = [cx, cy, cz, radius]
@@ -1710,30 +2144,30 @@ class Canvas3D(QWidget):
                     if not has_z: missing_vars.append('z')
 
                     if len(missing_vars) == 1:
-                        axis = missing_vars[0] # 轴向
+                        axis = missing_vars[0]  # 轴向
 
                         # 提取非轴向系数
                         if axis == 'z':
-                            A = float(c_map.get((2, 0, 0), 0)) # x^2
-                            B = float(c_map.get((0, 2, 0), 0)) # y^2
-                            D = float(c_map.get((1, 0, 0), 0)) # x
-                            E = float(c_map.get((0, 1, 0), 0)) # y
-                            G = float(c_map.get((0, 0, 0), 0)) # const
-                            cross = float(c_map.get((1, 1, 0), 0)) # xy
+                            A = float(c_map.get((2, 0, 0), 0))  # x^2
+                            B = float(c_map.get((0, 2, 0), 0))  # y^2
+                            D = float(c_map.get((1, 0, 0), 0))  # x
+                            E = float(c_map.get((0, 1, 0), 0))  # y
+                            G = float(c_map.get((0, 0, 0), 0))  # const
+                            cross = float(c_map.get((1, 1, 0), 0))  # xy
                         elif axis == 'y':
-                            A = float(c_map.get((2, 0, 0), 0)) # x^2
-                            B = float(c_map.get((0, 0, 2), 0)) # z^2
-                            D = float(c_map.get((1, 0, 0), 0)) # x
-                            E = float(c_map.get((0, 0, 1), 0)) # z
-                            G = float(c_map.get((0, 0, 0), 0)) # const
-                            cross = float(c_map.get((1, 0, 1), 0)) # xz
-                        else: # x
-                            A = float(c_map.get((0, 2, 0), 0)) # y^2
-                            B = float(c_map.get((0, 0, 2), 0)) # z^2
-                            D = float(c_map.get((0, 1, 0), 0)) # y
-                            E = float(c_map.get((0, 0, 1), 0)) # z
-                            G = float(c_map.get((0, 0, 0), 0)) # const
-                            cross = float(c_map.get((0, 1, 1), 0)) # yz
+                            A = float(c_map.get((2, 0, 0), 0))  # x^2
+                            B = float(c_map.get((0, 0, 2), 0))  # z^2
+                            D = float(c_map.get((1, 0, 0), 0))  # x
+                            E = float(c_map.get((0, 0, 1), 0))  # z
+                            G = float(c_map.get((0, 0, 0), 0))  # const
+                            cross = float(c_map.get((1, 0, 1), 0))  # xz
+                        else:  # x
+                            A = float(c_map.get((0, 2, 0), 0))  # y^2
+                            B = float(c_map.get((0, 0, 2), 0))  # z^2
+                            D = float(c_map.get((0, 1, 0), 0))  # y
+                            E = float(c_map.get((0, 0, 1), 0))  # z
+                            G = float(c_map.get((0, 0, 0), 0))  # const
+                            cross = float(c_map.get((0, 1, 1), 0))  # yz
 
                         # 检查是否为标准圆：A=B!=0, cross=0
                         eps = 1e-7
@@ -1742,7 +2176,7 @@ class Canvas3D(QWidget):
                             # (u + D/2A)^2 + (v + E/2A)^2 = R^2
                             c1 = -D / (2 * A)
                             c2 = -E / (2 * A)
-                            r_sq = c1**2 + c2**2 - G/A
+                            r_sq = c1 ** 2 + c2 ** 2 - G / A
 
                             if r_sq > 0:
                                 radius = math.sqrt(r_sq)
@@ -1775,8 +2209,8 @@ class Canvas3D(QWidget):
 
                                 # 降低分辨率以减小面片数量
                                 mesh = pv.Cylinder(center=center, direction=direction,
-                                                 radius=radius, height=height,
-                                                 resolution=48, capping=False) # 不封口
+                                                   radius=radius, height=height,
+                                                   resolution=48, capping=False)  # 不封口
 
                                 mesh.field_data["geom_type"] = ["cylinder"]
                                 mesh.field_data["cylinder_params"] = [*center, *direction, radius]
@@ -1791,13 +2225,13 @@ class Canvas3D(QWidget):
                     c_map = {m: c for m, c in zip(monoms, coeffs)}
 
                     # 提取系数
-                    A = float(c_map.get((2, 0, 0), 0)) # x^2
-                    B = float(c_map.get((0, 2, 0), 0)) # y^2
-                    C = float(c_map.get((0, 0, 2), 0)) # z^2
-                    D = float(c_map.get((1, 0, 0), 0)) # x
-                    E = float(c_map.get((0, 1, 0), 0)) # y
-                    F = float(c_map.get((0, 0, 1), 0)) # z
-                    G = float(c_map.get((0, 0, 0), 0)) # const
+                    A = float(c_map.get((2, 0, 0), 0))  # x^2
+                    B = float(c_map.get((0, 2, 0), 0))  # y^2
+                    C = float(c_map.get((0, 0, 2), 0))  # z^2
+                    D = float(c_map.get((1, 0, 0), 0))  # x
+                    E = float(c_map.get((0, 1, 0), 0))  # y
+                    F = float(c_map.get((0, 0, 1), 0))  # z
+                    G = float(c_map.get((0, 0, 0), 0))  # const
 
                     eps = 1e-7
 
@@ -1806,35 +2240,35 @@ class Canvas3D(QWidget):
                     is_cone_z = (abs(A - B) < eps and abs(A + C) < eps and abs(A) > eps)
 
                     if is_cone_z:
-                         # 生成圆锥网格
-                         # z = ±sqrt(x^2+y^2)
-                         # 范围：z in [-view_r, view_r]
-                         # 也就是 r in [0, view_r]
+                        # 生成圆锥网格
+                        # z = ±sqrt(x^2+y^2)
+                        # 范围：z in [-view_r, view_r]
+                        # 也就是 r in [0, view_r]
 
-                         res = 100
-                         r_max = view_r * 1.0 # 绑定到视图半径
+                        res = 100
+                        r_max = view_r * 1.0  # 绑定到视图半径
 
-                         # 生成点云或网格
-                         # 使用参数方程: x=r*cos(t), y=r*sin(t), z=r
-                         r = np.linspace(0, r_max, res)
-                         theta = np.linspace(0, 2*np.pi, res)
-                         r_grid, theta_grid = np.meshgrid(r, theta)
+                        # 生成点云或网格
+                        # 使用参数方程: x=r*cos(t), y=r*sin(t), z=r
+                        r = np.linspace(0, r_max, res)
+                        theta = np.linspace(0, 2 * np.pi, res)
+                        r_grid, theta_grid = np.meshgrid(r, theta)
 
-                         X = r_grid * np.cos(theta_grid)
-                         Y = r_grid * np.sin(theta_grid)
-                         Z = r_grid # 上半部分
+                        X = r_grid * np.cos(theta_grid)
+                        Y = r_grid * np.sin(theta_grid)
+                        Z = r_grid  # 上半部分
 
-                         # 创建上半部分 mesh
-                         grid_up = pv.StructuredGrid(X, Y, Z)
+                        # 创建上半部分 mesh
+                        grid_up = pv.StructuredGrid(X, Y, Z)
 
-                         # 创建下半部分 mesh
-                         grid_down = pv.StructuredGrid(X, Y, -Z)
+                        # 创建下半部分 mesh
+                        grid_down = pv.StructuredGrid(X, Y, -Z)
 
-                         mesh = grid_up.merge(grid_down)
+                        mesh = grid_up.merge(grid_down)
 
-                         # 标记几何体类型
-                         mesh.field_data["geom_type"] = ["general"] # 使用通用半透明渲染
-                         return mesh
+                        # 标记几何体类型
+                        mesh.field_data["geom_type"] = ["general"]  # 使用通用半透明渲染
+                        return mesh
 
                     # Case 2: 抛物面 z = a*x^2 + b*y^2 (C=0, F!=0, A>0, B>0)
                     # 简化检测：A=B, C=0, F=-1 (z = x^2 + y^2)
@@ -1842,39 +2276,39 @@ class Canvas3D(QWidget):
                     is_paraboloid_z = (abs(A - B) < eps and abs(C) < eps and abs(F) > eps and abs(A) > eps)
 
                     if is_paraboloid_z:
-                         # z = -(A/F)*x^2 - (B/F)*y^2 - G/F ...
-                         # 假设标准形式 z = k*(x^2+y^2)
-                         k = -A/F
+                        # z = -(A/F)*x^2 - (B/F)*y^2 - G/F ...
+                        # 假设标准形式 z = k*(x^2+y^2)
+                        k = -A / F
 
-                         # 范围：z in [0, view_r] -> r^2 <= view_r/k
-                         # 如果 k > 0 (开口向上)
-                         if k > 0:
-                             z_max = view_r
-                             r_max = math.sqrt(z_max / k)
-                         else:
-                             z_min = -view_r
-                             r_max = math.sqrt(z_min / k)
+                        # 范围：z in [0, view_r] -> r^2 <= view_r/k
+                        # 如果 k > 0 (开口向上)
+                        if k > 0:
+                            z_max = view_r
+                            r_max = math.sqrt(z_max / k)
+                        else:
+                            z_min = -view_r
+                            r_max = math.sqrt(z_min / k)
 
-                         # 限制 r_max 不要太大 (避免视野极小时渲染错误)
-                         r_max = min(r_max, view_r * 1.5)
+                        # 限制 r_max 不要太大 (避免视野极小时渲染错误)
+                        r_max = min(r_max, view_r * 1.5)
 
-                         res = 100
-                         r = np.linspace(0, r_max, res)
-                         theta = np.linspace(0, 2*np.pi, res)
-                         r_grid, theta_grid = np.meshgrid(r, theta)
+                        res = 100
+                        r = np.linspace(0, r_max, res)
+                        theta = np.linspace(0, 2 * np.pi, res)
+                        r_grid, theta_grid = np.meshgrid(r, theta)
 
-                         X = r_grid * np.cos(theta_grid)
-                         Y = r_grid * np.sin(theta_grid)
-                         Z = k * (r_grid**2)
+                        X = r_grid * np.cos(theta_grid)
+                        Y = r_grid * np.sin(theta_grid)
+                        Z = k * (r_grid ** 2)
 
-                         # 添加线性项/常数项偏移 (简化处理，假设主要在原点)
-                         if abs(D) > eps: X += -D/(2*A)
-                         if abs(E) > eps: Y += -E/(2*B)
-                         if abs(G) > eps: Z += -G/F
+                        # 添加线性项/常数项偏移 (简化处理，假设主要在原点)
+                        if abs(D) > eps: X += -D / (2 * A)
+                        if abs(E) > eps: Y += -E / (2 * B)
+                        if abs(G) > eps: Z += -G / F
 
-                         mesh = pv.StructuredGrid(X, Y, Z)
-                         mesh.field_data["geom_type"] = ["general"]
-                         return mesh
+                        mesh = pv.StructuredGrid(X, Y, Z)
+                        mesh.field_data["geom_type"] = ["general"]
+                        return mesh
 
                     # Case 3: Cylinder (Axis Aligned)
                     # x^2 + y^2 = r^2 (along Z) -> A=B, C=0, G < 0
@@ -1887,23 +2321,23 @@ class Canvas3D(QWidget):
                         # 这样圆柱体就是固定的，不会随着相机平移而滑动
                         limit = view_r * 0.6  # 控制显示范围
                         if is_cyl_z:
-                            radius = math.sqrt(-G/A)
+                            radius = math.sqrt(-G / A)
                             direction = [0, 0, 1]
                             center = [0, 0, 0]  # 固定中心
                         elif is_cyl_y:
-                            radius = math.sqrt(-G/A)
+                            radius = math.sqrt(-G / A)
                             direction = [0, 1, 0]
                             center = [0, 0, 0]
                         else:
-                            radius = math.sqrt(-G/B)
+                            radius = math.sqrt(-G / B)
                             direction = [1, 0, 0]
                             center = [0, 0, 0]
 
                         # Generate Cylinder
                         # Height = limit * 1.2 (更扁平，减少体积感)
                         mesh = pv.Cylinder(center=center, direction=direction,
-                                         radius=radius, height=min(limit * 1.2, 40.0),
-                                         resolution=40, capped=True)
+                                           radius=radius, height=min(limit * 1.2, 40.0),
+                                           resolution=40, capped=True)
 
                         mesh.field_data["geom_type"] = ["cylinder"]
                         # Params: [cx,cy,cz, dx,dy,dz, r]
@@ -1947,11 +2381,12 @@ class Canvas3D(QWidget):
 
                             # 标记几何体类型
                             mesh.field_data["geom_type"] = ["plane"]
-                            mesh.field_data["plane_params"] = [normal[0], normal[1], normal[2], center[0], center[1], center[2]]
+                            mesh.field_data["plane_params"] = [normal[0], normal[1], normal[2], center[0], center[1],
+                                                               center[2]]
 
                             return mesh
                         except Exception as e:
-                            pass # Fallback to marching cubes
+                            pass  # Fallback to marching cubes
             except Exception as e:
                 # 检测失败则回退到 Marching Cubes
                 pass
@@ -1982,16 +2417,27 @@ class Canvas3D(QWidget):
         lin = np.linspace(gmin, gmax, RES)
         X, Y, Z = np.meshgrid(lin, lin, lin, indexing='ij')
         try:
-            V = np.asarray(f(X, Y, Z), dtype=float)
+            with np.errstate(invalid='ignore', divide='ignore', over='ignore'):
+                V = np.asarray(f(X, Y, Z), dtype=float)
             if V.shape != X.shape:
                 V = np.full(X.shape, float(V.flat[0]))
         except Exception as e:
             QMessageBox.critical(self, "错误", f"方程计算失败: {e}")
             return None
 
-        if not (V.min() < 0 < V.max()):
+        finite_mask = np.isfinite(V)
+        if not np.any(finite_mask):
+            return None
 
-            return pv.PolyData()
+        finite_values = V[finite_mask]
+        vmin = float(np.min(finite_values))
+        vmax = float(np.max(finite_values))
+        if not (vmin < 0 < vmax):
+            return None
+
+        # 将定义域外的无效值填成稳定的正值，避免无定义区域被错误识别为零等值面。
+        fill_value = max(abs(vmin), abs(vmax), 1.0) + 1.0
+        V = np.where(finite_mask, V, fill_value)
 
         try:
             sp_step = (limit * 2.0) / (RES - 1)
@@ -1999,9 +2445,11 @@ class Canvas3D(QWidget):
                 V, level=0, spacing=(sp_step,) * 3)
             verts += gmin
         except Exception as e:
+            QMessageBox.critical(self, "错误", f"等值面生成失败: {e}")
+            return None
 
-                QMessageBox.critical(self, "错误", f"等值面生成失败: {e}")
-                return None
+        if len(verts) == 0 or len(faces) == 0:
+            return None
 
         n = len(faces)
         pv_faces = np.empty(n * 4, dtype=np.int_)
@@ -2038,6 +2486,8 @@ class Canvas3D(QWidget):
         self._cam_timer.stop()
         self._tick_timer.stop()
         self._legend.hide()
+        # 清空重绘缓存，避免交互结束后的重建把已删除方程重新画出来
+        self._last_parsed_equations = []
         self._eq_meshes = {}  # 【Fix】提前清除，避免 _init_scene 中 plotter.clear() 后 mesh 引用悬空
         self._init_scene()
         self.plotter.render()
@@ -2059,6 +2509,7 @@ class ParamItem(QWidget):
     """
     参数项：包含名称、当前值显示、滑动条、播放按钮和删除按钮。
     """
+
     def __init__(self, name, val, v_min, v_max, on_change, on_delete, parent=None):
         super().__init__(parent)
         self.setFixedHeight(72)
@@ -2145,7 +2596,7 @@ class ParamItem(QWidget):
         min_lbl.setStyleSheet(f"color:{TEXT_HINT}; border:none;")
 
         self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(0, 1000) # 0 to 1000 for 0.1 precision mapping
+        self.slider.setRange(0, 1000)  # 0 to 1000 for 0.1 precision mapping
         self.slider.setValue(int((val - v_min) / (v_max - v_min) * 1000))
         self.slider.setStyleSheet(f"""
             QSlider::groove:horizontal {{
@@ -2208,14 +2659,14 @@ class ParamItem(QWidget):
     def _toggle_animation(self):
         if self.play_btn.isChecked():
             self.play_btn.setText("⏸")
-            self.anim_timer.start(50) # 20 FPS
+            self.anim_timer.start(50)  # 20 FPS
         else:
             self.play_btn.setText("▶")
             self.anim_timer.stop()
 
     def _animate_step(self):
         curr_v = self.slider.value()
-        new_v = curr_v + self._anim_dir * 5 # 每次移动 0.5%
+        new_v = curr_v + self._anim_dir * 5  # 每次移动 0.5%
         if new_v >= 1000:
             new_v = 1000
             self._anim_dir = -1
@@ -2223,6 +2674,42 @@ class ParamItem(QWidget):
             new_v = 0
             self._anim_dir = 1
         self.slider.setValue(new_v)
+
+
+# ══════════════════════════════════════════════════════
+#  公式文本标签（自绘根号横线）
+# ══════════════════════════════════════════════════════
+class FormulaLabel(QWidget):
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self._text = text
+        self._color = QColor(TEXT_MAIN)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+    def setText(self, text):
+        self._text = text
+        self.updateGeometry()
+        self.update()
+
+    def setTextColor(self, color):
+        self._color = QColor(color)
+        self.update()
+
+    def sizeHint(self):
+        fm = QFontMetrics(self.font())
+        return QSize(fm.horizontalAdvance(self._text) + 6, fm.height() + 8)
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.TextAntialiasing)
+        painter.setPen(self._color)
+        fm = painter.fontMetrics()
+        baseline = (self.height() + fm.ascent() - fm.descent()) / 2.0
+        draw_formula_text(painter, 0, baseline, self._text)
+
 
 # ══════════════════════════════════════════════════════
 #  方程列表条目
@@ -2241,12 +2728,11 @@ class EqItem(QWidget):
         self._badge.setFixedSize(16, 16)
         self._badge.setStyleSheet(f"background:{color}; border-radius:4px; border:none;")
 
-        # 使用 SymPy 的漂亮格式，在列表中直接显示 x² + y² = 25 这样的形式
-        lbl = QLabel(sympy_to_label(eq_text))
-        lbl.setFont(QFont("Consolas", 13))
-        lbl.setStyleSheet(
-            f"color:{TEXT_MAIN}; border:none; background:transparent;")
-        lbl.setWordWrap(True)
+        # 自绘公式，保证根号横线与根号本体连续
+        lbl = FormulaLabel(sympy_to_label(eq_text))
+        lbl.setFont(QFont("Cambria Math", 13))
+        lbl.setTextColor(TEXT_MAIN)
+        lbl.setStyleSheet("background:transparent; border:none;")
 
         del_btn = QPushButton("✕")
         del_btn.setFixedSize(28, 28)
@@ -2278,8 +2764,8 @@ class MathPlotterApp(QMainWindow):
         self.resize(1400, 860)
         self._equations = []
         self._eq_widgets = []
-        self._params = {}           # dict: {name: value}
-        self._param_widgets = {}    # dict: {name: ParamItem}
+        self._params = {}  # dict: {name: value}
+        self._param_widgets = {}  # dict: {name: ParamItem}
         self._color_idx = 0
         self._build_ui()
 
@@ -2540,8 +3026,8 @@ class MathPlotterApp(QMainWindow):
         self.eq_list_w = QWidget()
         self.eq_list_w.setStyleSheet(f"background:{BG_PANEL};")
         self.eq_list_lay = QVBoxLayout(self.eq_list_w)
-        self.eq_list_lay.setContentsMargins(16, 16, 16, 16) # 增加内边距
-        self.eq_list_lay.setSpacing(12) # 增加条目间距
+        self.eq_list_lay.setContentsMargins(16, 16, 16, 16)  # 增加内边距
+        self.eq_list_lay.setSpacing(12)  # 增加条目间距
         self.eq_list_lay.addStretch()
         self.eq_scroll.setWidget(self.eq_list_w)
         ll.addWidget(self.eq_scroll, 1)
@@ -2619,7 +3105,7 @@ class MathPlotterApp(QMainWindow):
             pos = le.cursorPosition()
             if pos > 0:
                 text = le.text()
-                new_text = text[:pos-1] + text[pos:]
+                new_text = text[:pos - 1] + text[pos:]
                 le.setText(new_text)
                 le.setCursorPosition(pos - 1)
         le.setFocus()
@@ -2641,8 +3127,8 @@ class MathPlotterApp(QMainWindow):
         hov = QColor(max(c.red() - 30, 0), max(c.green() - 30, 0), max(c.blue() - 30, 0)).name()
         prs = QColor(max(c.red() - 55, 0), max(c.green() - 55, 0), max(c.blue() - 55, 0)).name()
         b = QPushButton(text)
-        b.setFont(QFont("Segoe UI", 9, QFont.Bold)) # 调小字体
-        b.setFixedHeight(34) # 调小高度
+        b.setFont(QFont("Segoe UI", 9, QFont.Bold))  # 调小字体
+        b.setFixedHeight(34)  # 调小高度
         b.setCursor(Qt.PointingHandCursor)
         b.setStyleSheet(f"""
             QPushButton {{
@@ -2692,12 +3178,68 @@ class MathPlotterApp(QMainWindow):
 
     def _remove_param(self, name):
         if name in self._params:
-            del self._params[name]
-            widget = self._param_widgets.pop(name)
-            widget.setParent(None)
-            widget.deleteLater()
+            self._delete_param_widget(name)
             # 重新绘制，可能需要显示错误提示（如果方程引用了已删除的参数）
             self._plot_all(auto_active=[])
+
+    def _delete_param_widget(self, name):
+        """仅删除参数数据与控件，不触发重绘。"""
+        if name in self._params:
+            del self._params[name]
+        widget = self._param_widgets.pop(name, None)
+        if widget:
+            widget.setParent(None)
+            widget.deleteLater()
+
+    def _normalize_and_build_expr(self, eq_text):
+        """将输入文本标准化并转换为 SymPy 表达式，返回 (expr, normalized_text)。"""
+        funcs = ["sin", "cos", "tan", "sqrt", "exp", "log", "ln", "abs",
+                 "asin", "acos", "atan", "sinh", "cosh", "tanh", "floor", "ceil"]
+        for f in funcs:
+            eq_text = eq_text.replace(f"{f}(", f"{f} (")
+
+        eq_text = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', eq_text)
+        eq_text = re.sub(r'([a-zA-Z])([xyz])', r'\1*\2', eq_text)
+        eq_text = re.sub(r'([xyz])([a-zA-Z])', r'\1*\2', eq_text)
+        eq_text = re.sub(r'(?<=[a-zA-Z0-9])(?=\()', '*', eq_text)
+        eq_text = re.sub(r'(?<=\))(?=[a-zA-Z0-9])', '*', eq_text)
+
+        t = eq_text.replace('^', '**')
+        ops = ["==", "!=", ">=", "<=", ">", "<", "="]
+        found_op = None
+        for op in ops:
+            if op in t:
+                found_op = op
+                break
+
+        if found_op:
+            lhs, rhs = t.split(found_op, 1)
+            expr = sp.sympify(f"({lhs})-({rhs})")
+        else:
+            expr = sp.sympify(t)
+        return expr, t
+
+    def _prune_unused_params(self):
+        """删除当前已无方程引用的参数。"""
+        needed = set()
+        coords = {'x', 'y', 'z'}
+        for val in self._equations:
+            if not val:
+                continue
+            _, eq_text, _ = val
+            try:
+                expr, _ = self._normalize_and_build_expr(eq_text)
+                for s in expr.free_symbols:
+                    name = str(s)
+                    if name not in coords:
+                        needed.add(name)
+            except Exception:
+                # 解析失败的方程在绘制时会报错，这里不做参数回收判断
+                pass
+
+        stale = [name for name in list(self._params.keys()) if name not in needed]
+        for name in stale:
+            self._delete_param_widget(name)
 
     def _on_param_change(self, name, val):
         self._params[name] = val
@@ -2744,6 +3286,8 @@ class MathPlotterApp(QMainWindow):
                 self._eq_widgets[idx].setParent(None)
                 self._eq_widgets[idx] = None
 
+        # 删除方程后回收已无引用的参数
+        self._prune_unused_params()
         self._update_count()
         # 删除时立即重绘，确保所见即所得
         self._plot_all(auto_active=[])
@@ -2756,6 +3300,9 @@ class MathPlotterApp(QMainWindow):
             item = self.eq_list_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        # 清空方程时同步清空参数区
+        for name in list(self._params.keys()):
+            self._delete_param_widget(name)
         self.canvas3d.clear_canvas()
         self._update_count()
 
@@ -2782,7 +3329,7 @@ class MathPlotterApp(QMainWindow):
             if text:
                 # 输入框预览模式：生成临时 ID
                 temp_id = str(uuid.uuid4())
-                existing_colors = [] # 预览模式暂不考虑冲突
+                existing_colors = []  # 预览模式暂不考虑冲突
                 color = generate_random_color(existing_colors)
                 target_items.append((temp_id, text, color))
             else:
@@ -2839,52 +3386,7 @@ class MathPlotterApp(QMainWindow):
 
     def _parse(self, eq_text):
         try:
-            # 1. Protect common functions: "sqrt(" -> "sqrt (" to avoid implicit multiplication
-            # This prevents "sqrt(x)" becoming "sqrt*(x)" which is invalid
-            funcs = ["sin", "cos", "tan", "sqrt", "exp", "log", "ln", "abs",
-                     "asin", "acos", "atan", "sinh", "cosh", "tanh", "floor", "ceil"]
-            for f in funcs:
-                eq_text = eq_text.replace(f"{f}(", f"{f} (")
-
-            # ──【修复】更完善的隐式乘法处理 (GeoGebra 风格) ──
-            # 1. 数字后接字母: 2x -> 2*x
-            eq_text = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', eq_text)
-
-            # 2. 字母后接数字 (如果不是幂运算): x2 -> x*2 (通常建议用 x^2，这里作为防御)
-            # 但不要处理已经在处理幂运算的场景
-            # eq_text = re.sub(r'([a-zA-Z])(\d)', r'\1*\2', eq_text) # 暂时不开启，避免破坏 ^2
-
-            # 3. 处理 ax, az, xyz 等隐式乘法
-            # 关键：识别 x, y, z 与前后字母的关系
-            # 如果字母不是函数名的一部分，就在它们之间插入 *
-            # 我们先处理坐标变量 x, y, z 与其它字母的相邻情况
-            eq_text = re.sub(r'([a-zA-Z])([xyz])', r'\1*\2', eq_text) # ax -> a*x, bx -> b*x
-            eq_text = re.sub(r'([xyz])([a-zA-Z])', r'\1*\2', eq_text) # xa -> x*a, zb -> z*b
-
-            # 4. 处理坐标变量之间的隐式乘法: xy -> x*y, yz -> y*z
-            # 注意：上一步已经覆盖了 [a-zA-Z][xyz]，所以 xy 会被替换为 x*y。
-
-            # 5. 括号相关的隐式乘法
-            eq_text = re.sub(r'(?<=[a-zA-Z0-9])(?=\()', '*', eq_text) # a(x) -> a*(x)
-            eq_text = re.sub(r'(?<=\))(?=[a-zA-Z0-9])', '*', eq_text) # (x)a -> (x)*a
-
-            t = eq_text.replace('^', '**')
-
-            # 【Fix】支持不等式解析 (>=, <=, >, <, !=, ==, =)
-            # 将关系式转换为 f(x,y,z) = LHS - RHS，以便 Marching Cubes 绘制边界
-            ops = ["==", "!=", ">=", "<=", ">", "<", "="]
-            found_op = None
-            for op in ops:
-                if op in t:
-                    found_op = op
-                    break
-
-            if found_op:
-                lhs, rhs = t.split(found_op, 1)
-                # print(f"[DEBUG] Parsing relation: {lhs} {found_op} {rhs}")
-                expr = sp.sympify(f"({lhs})-({rhs})")
-            else:
-                expr = sp.sympify(t)
+            expr, t = self._normalize_and_build_expr(eq_text)
 
             # ──【新增】参数检测逻辑 ──
             all_syms = expr.free_symbols
