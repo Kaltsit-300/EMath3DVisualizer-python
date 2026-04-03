@@ -144,10 +144,16 @@ math_3d_visualizer.py
 ```
 
 ---
+## 效果展示
+<img width="2559" height="1494" alt="image" src="https://github.com/user-attachments/assets/5a474147-fb67-4c35-8641-0193220ec017" />
+<img width="2559" height="1494" alt="image" src="https://github.com/user-attachments/assets/e52f8df5-b64b-4cbb-a213-b0208bbc77dd" />
 
+
+
+---
 ## 使用场景
 
-- 三重积分做题辅助，用于分析空间中面与面和空间中体与面之间的位置关系，或分析面与面所围成的立体图形在空间里的具体位置
+- 用于辅助三重积分解题，用于分析空间中面与面和空间中体与面之间的位置关系，或分析面与面所围成的立体图形在空间里的具体位置
 
 
 ## 说明
